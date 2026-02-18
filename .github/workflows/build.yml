@@ -33,6 +33,7 @@ jobs:
           git remote add mainlining https://github.com/mainlining/pmaports.git
           git fetch mainlining nikroks/alioth
           git reset --hard mainlining/nikroks/alioth
+          pmbootstrap pull  # ADICIONADO: atualizar pmaports
 
       - name: Clone kernel sources
         run: |
@@ -68,4 +69,13 @@ jobs:
         with:
           name: xiaomi-alioth
           path: out/*-alioth.img*
+          retention-days: 7
+
+      # NOVO PASSO: Upload do log do pmbootstrap em caso de falha
+      - name: Upload pmbootstrap log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pmbootstrap-log
+          path: /home/runner/.local/var/pmbootstrap/log.txt
           retention-days: 7
