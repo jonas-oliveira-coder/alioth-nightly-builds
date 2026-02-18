@@ -55,25 +55,30 @@ jobs:
         run: |
           mkdir out
 
-      # PASSO CRÍTICO: Instalar o sistema e corrigir o losetup
-      - name: Install system with losetup fix
+      # PASSO CRÍTICO: Criar hook para corrigir o losetup durante a instalação
+      - name: Create pmbootstrap hook to fix losetup symlink
+        run: |
+          mkdir -p ~/.local/var/pmbootstrap/hooks
+          cat > ~/.local/var/pmbootstrap/hooks/99-fix-losetup.sh << 'EOF'
+          #!/bin/sh
+          echo "========================================="
+          echo "Running losetup fix hook..."
+          echo "========================================="
+          # Usar o próprio pmbootstrap para executar o comando dentro do chroot
+          /home/runner/work/alioth-nightly-builds/alioth-nightly-builds/pmbootstrap/pmbootstrap.py chroot --rootfs xiaomi-alioth -- ln -sf /bin/losetup /usr/sbin/losetup 2>/dev/null
+          if [ $? -eq 0 ]; then
+            echo "✓ Symlink created /bin/losetup -> /usr/sbin/losetup"
+          else
+            echo "⚠ Hook could not create symlink (maybe rootfs not ready yet?)"
+          fi
+          EOF
+          chmod +x ~/.local/var/pmbootstrap/hooks/99-fix-losetup.sh
+          echo "✅ Hook installed at ~/.local/var/pmbootstrap/hooks/99-fix-losetup.sh"
+
+      - name: Build xiaomi-alioth
         run: |
           cp xiaomi-alioth.cfg ~/.config/pmbootstrap_v3.cfg
-
-          # Primeira tentativa de instalação – vai falhar no mkinitfs, mas todos os pacotes já estão instalados
-          echo "🚀 Starting pmbootstrap install (first attempt, may fail)..."
-          pmbootstrap install --password 147147 || true
-
-          # Aplicar a correção do losetup (criar link simbólico)
-          echo "🔧 Creating symlink /bin/losetup -> /usr/sbin/losetup..."
-          pmbootstrap chroot --rootfs xiaomi-alioth -- ln -sf /bin/losetup /usr/sbin/losetup
-
-          # Gerar o initramfs manualmente (agora deve funcionar)
-          echo "📦 Generating initramfs manually..."
-          pmbootstrap chroot --rootfs xiaomi-alioth -- mkinitfs
-
-          # Exportar as imagens
-          echo "📤 Exporting images..."
+          pmbootstrap install --password 147147
           pmbootstrap export
           cp /tmp/postmarketOS-export/boot.img out/boot-xiaomi-tianma-alioth.img
           cp /tmp/postmarketOS-export/xiaomi-alioth.img out/rootfs-xiaomi-alioth.img
