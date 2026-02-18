@@ -55,18 +55,17 @@ jobs:
         run: |
           mkdir out
 
-      # PASSO CRÍTICO: Instalar o sistema com fallback para o erro do losetup
-      - name: Install system (with losetup fix)
+      # PASSO CRÍTICO: Instalar o sistema e corrigir o losetup
+      - name: Install system with losetup fix
         run: |
           cp xiaomi-alioth.cfg ~/.config/pmbootstrap_v3.cfg
 
-          # Primeira tentativa de instalação – vai falhar no mkinitfs, mas os pacotes já estão instalados
+          # Primeira tentativa de instalação – vai falhar no mkinitfs, mas todos os pacotes já estão instalados
           echo "🚀 Starting pmbootstrap install (first attempt, may fail)..."
           pmbootstrap install --password 147147 || true
 
-          # Aplicar a correção do losetup
-          echo "🔧 Applying losetup fix..."
-          pmbootstrap chroot --rootfs xiaomi-alioth -- apk add util-linux-misc
+          # Aplicar a correção do losetup (criar link simbólico)
+          echo "🔧 Creating symlink /bin/losetup -> /usr/sbin/losetup..."
           pmbootstrap chroot --rootfs xiaomi-alioth -- ln -sf /bin/losetup /usr/sbin/losetup
 
           # Gerar o initramfs manualmente (agora deve funcionar)
