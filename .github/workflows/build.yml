@@ -55,8 +55,10 @@ jobs:
         run: |
           mkdir out
 
-      # PASSO CRÍTICO: Criar hook para corrigir o losetup durante a instalação
-      - name: Create pmbootstrap hook to fix losetup symlink
+      # ============================================================
+      # HOOK DE CORREÇÃO PARA O LOSETUP
+      # ============================================================
+      - name: Create pmbootstrap hook to fix losetup location
         run: |
           mkdir -p ~/.local/var/pmbootstrap/hooks
           cat > ~/.local/var/pmbootstrap/hooks/99-fix-losetup.sh << 'EOF'
@@ -64,13 +66,19 @@ jobs:
           echo "========================================="
           echo "Running losetup fix hook..."
           echo "========================================="
-          # Usar o próprio pmbootstrap para executar o comando dentro do chroot
-          /home/runner/work/alioth-nightly-builds/alioth-nightly-builds/pmbootstrap/pmbootstrap.py chroot --rootfs xiaomi-alioth -- ln -sf /bin/losetup /usr/sbin/losetup 2>/dev/null
-          if [ $? -eq 0 ]; then
-            echo "✓ Symlink created /bin/losetup -> /usr/sbin/losetup"
-          else
-            echo "⚠ Hook could not create symlink (maybe rootfs not ready yet?)"
-          fi
+          # Cria link simbólico dentro do rootfs apontando para o local real do losetup
+          pmbootstrap chroot --rootfs xiaomi-alioth -- sh -c "
+            if [ -f /sbin/losetup ]; then
+              ln -sf /sbin/losetup /usr/sbin/losetup
+              echo '✓ Symlink created: /usr/sbin/losetup -> /sbin/losetup'
+            elif [ -f /usr/bin/losetup ]; then
+              ln -sf /usr/bin/losetup /usr/sbin/losetup
+              echo '✓ Symlink created: /usr/sbin/losetup -> /usr/bin/losetup'
+            else
+              echo '❌ losetup not found in /sbin or /usr/bin!'
+              exit 1
+            fi
+          "
           EOF
           chmod +x ~/.local/var/pmbootstrap/hooks/99-fix-losetup.sh
           echo "✅ Hook installed at ~/.local/var/pmbootstrap/hooks/99-fix-losetup.sh"
