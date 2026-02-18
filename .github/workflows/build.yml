@@ -33,7 +33,6 @@ jobs:
           git remote add mainlining https://github.com/mainlining/pmaports.git
           git fetch mainlining nikroks/alioth
           git reset --hard mainlining/nikroks/alioth
-          pmbootstrap pull  # ADICIONADO: atualizar pmaports
 
       - name: Clone kernel sources
         run: |
@@ -56,10 +55,70 @@ jobs:
         run: |
           mkdir out
 
-      - name: Build xiaomi-alioth
+      # PASSO CRÍTICO: Criar hook de pós-instalação para corrigir o losetup
+      - name: Create post-install hook to fix losetup
+        run: |
+          # Criar diretório para hooks personalizados
+          mkdir -p ~/.local/var/pmbootstrap/hooks
+          
+          # Criar script de hook que será executado durante a instalação
+          cat > ~/.local/var/pmbootstrap/hooks/99-fix-losetup.sh << 'EOF'
+          #!/bin/sh
+          # Hook executado durante pmbootstrap install para corrigir o problema do losetup
+          
+          echo "========================================="
+          echo "Running losetup fix hook..."
+          echo "========================================="
+          
+          # Verificar se o losetup existe em /bin
+          if [ -f /bin/losetup ]; then
+            echo "✓ losetup found at /bin/losetup"
+            
+            # Verificar se o link já existe
+            if [ ! -L /usr/sbin/losetup ] && [ ! -f /usr/sbin/losetup ]; then
+              echo "Creating symlink /bin/losetup -> /usr/sbin/losetup"
+              ln -sf /bin/losetup /usr/sbin/losetup
+              echo "✓ Symlink created successfully"
+            else
+              echo "✓ /usr/sbin/losetup already exists"
+            fi
+          else
+            echo "✗ losetup not found in /bin, installing util-linux-misc..."
+            apk add util-linux-misc
+            
+            # Após instalar, criar o link
+            if [ -f /bin/losetup ]; then
+              ln -sf /bin/losetup /usr/sbin/losetup
+              echo "✓ losetup installed and symlink created"
+            else
+              echo "✗ Failed to install losetup"
+            fi
+          fi
+          
+          # Verificação final
+          if [ -f /usr/sbin/losetup ] || [ -L /usr/sbin/losetup ]; then
+            echo "✓ Fix applied successfully! /usr/sbin/losetup is now available"
+            ls -la /usr/sbin/losetup
+          else
+            echo "✗ Fix failed! /usr/sbin/losetup still missing"
+          fi
+          
+          echo "========================================="
+          EOF
+          
+          # Tornar o script executável
+          chmod +x ~/.local/var/pmbootstrap/hooks/99-fix-losetup.sh
+          
+          echo "✅ Hook created at ~/.local/var/pmbootstrap/hooks/99-fix-losetup.sh"
+
+      - name: Build xiaomi-alioth with losetup fix
         run: |
           cp xiaomi-alioth.cfg ~/.config/pmbootstrap_v3.cfg
+          
+          # Executar a instalação - o hook será executado automaticamente
           pmbootstrap install --password 147147
+          
+          # Exportar as imagens
           pmbootstrap export
           cp /tmp/postmarketOS-export/boot.img out/boot-xiaomi-tianma-alioth.img
           cp /tmp/postmarketOS-export/xiaomi-alioth.img out/rootfs-xiaomi-alioth.img
@@ -71,7 +130,7 @@ jobs:
           path: out/*-alioth.img*
           retention-days: 7
 
-      # NOVO PASSO: Upload do log do pmbootstrap em caso de falha
+      # Log em caso de falha
       - name: Upload pmbootstrap log on failure
         if: failure()
         uses: actions/upload-artifact@v4
