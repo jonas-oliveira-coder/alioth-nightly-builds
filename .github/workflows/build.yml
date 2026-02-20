@@ -24,6 +24,7 @@ jobs:
           git clone --depth=1 https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git
           mkdir -p ~/.local/bin
           ln -s "$PWD/pmbootstrap/pmbootstrap.py" ~/.local/bin/pmbootstrap
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
           pmbootstrap --version
 
       - name: Set up pmaports
@@ -53,10 +54,10 @@ jobs:
 
       - name: Create artifact directory
         run: |
-          mkdir out
+          mkdir -p out
 
       # ============================================================
-      # HOOK DE CORREÇÃO PARA O LOSETUP
+      # HOOK DE CORREÇÃO PARA O LOSETUP (VERSÃO CORRIGIDA)
       # ============================================================
       - name: Create pmbootstrap hook to fix losetup location
         run: |
@@ -66,19 +67,23 @@ jobs:
           echo "========================================="
           echo "Running losetup fix hook..."
           echo "========================================="
-          # Cria link simbólico dentro do rootfs apontando para o local real do losetup
-          pmbootstrap chroot --rootfs xiaomi-alioth -- sh -c "
-            if [ -f /sbin/losetup ]; then
-              ln -sf /sbin/losetup /usr/sbin/losetup
-              echo '✓ Symlink created: /usr/sbin/losetup -> /sbin/losetup'
-            elif [ -f /usr/bin/losetup ]; then
-              ln -sf /usr/bin/losetup /usr/sbin/losetup
-              echo '✓ Symlink created: /usr/sbin/losetup -> /usr/bin/losetup'
-            else
-              echo '❌ losetup not found in /sbin or /usr/bin!'
-              exit 1
-            fi
-          "
+          # Caminho direto para o rootfs (mais confiável que pmbootstrap chroot)
+          ROOTFS="/home/runner/.local/var/pmbootstrap/chroot_rootfs_xiaomi-alioth"
+          
+          if [ -f "$ROOTFS/sbin/losetup" ]; then
+            mkdir -p "$ROOTFS/usr/sbin"
+            ln -sf /sbin/losetup "$ROOTFS/usr/sbin/losetup"
+            echo "✓ Symlink created: $ROOTFS/usr/sbin/losetup -> /sbin/losetup"
+          elif [ -f "$ROOTFS/usr/bin/losetup" ]; then
+            mkdir -p "$ROOTFS/usr/sbin"
+            ln -sf /usr/bin/losetup "$ROOTFS/usr/sbin/losetup"
+            echo "✓ Symlink created: $ROOTFS/usr/sbin/losetup -> /usr/bin/losetup"
+          else
+            echo "❌ losetup not found! Checking locations:"
+            ls -la "$ROOTFS/sbin" || true
+            ls -la "$ROOTFS/usr/bin" || true
+            exit 1
+          fi
           EOF
           chmod +x ~/.local/var/pmbootstrap/hooks/99-fix-losetup.sh
           echo "✅ Hook installed at ~/.local/var/pmbootstrap/hooks/99-fix-losetup.sh"
@@ -88,8 +93,68 @@ jobs:
           cp xiaomi-alioth.cfg ~/.config/pmbootstrap_v3.cfg
           pmbootstrap install --password 147147
           pmbootstrap export
-          cp /tmp/postmarketOS-export/boot.img out/boot-xiaomi-tianma-alioth.img
+          cp /tmp/postmarketOS-export/boot.img out/boot-xiaomi-alioth.img
           cp /tmp/postmarketOS-export/xiaomi-alioth.img out/rootfs-xiaomi-alioth.img
+
+      # ============================================================
+      # NOVO: Gerar imagens para instalação
+      # ============================================================
+      - name: Prepare installation images
+        run: |
+          cd out
+          
+          # Verificar tipo do rootfs
+          echo "=== Rootfs information ==="
+          file rootfs-xiaomi-alioth.img
+          
+          # Criar versão raw para flash direto
+          cp rootfs-xiaomi-alioth.img rootfs-raw.img
+          
+          # Criar versão tar.gz para extração via TWRP
+          gzip -c rootfs-xiaomi-alioth.img > rootfs-xiaomi-alioth.img.tar.gz
+          
+          # Informações para instalação
+          cat > INSTALL.txt << 'INSTALL'
+          ========================================
+          INSTRUÇÕES DE INSTALAÇÃO - XIAOMI ALIOTH
+          ========================================
+
+          SEU DISPOSITIVO TEM:
+          - Sistema A/B (slots a e b)
+          - NÃO tem partição system (usa super dinâmica)
+          - Partição userdata de ~113GB disponível
+
+          MÉTODO 1: INSTALAÇÃO VIA FASTBOOT (RECOMENDADO)
+          ------------------------------------------------
+          1. fastboot flash boot_a boot-xiaomi-alioth.img
+          2. fastboot flash userdata rootfs-xiaomi-alioth.img
+          3. fastboot set_active a
+          4. fastboot reboot
+
+          MÉTODO 2: INSTALAÇÃO VIA TWRP
+          -----------------------------
+          1. fastboot boot twrp-*.img
+          2. adb push rootfs-xiaomi-alioth.img.tar.gz /sdcard/
+          3. No TWRP: Wipe → Format Data (ext4)
+          4. No TWRP: Advanced → Terminal
+             cd /data
+             tar -xzvf /sdcard/rootfs-xiaomi-alioth.img.tar.gz
+          5. Install → Install Image → boot.img → partição Boot
+          6. Reboot
+
+          MÉTODO 3: SE NÃO BOOTAR
+          -----------------------
+          1. Tente o outro slot: fastboot set_active b
+          2. Use parâmetros de debug:
+             fastboot boot boot-xiaomi-alioth.img --cmdline "pmos.debug-shell pmos.verbose console=tty0"
+          
+          Arquivos gerados:
+          - boot-xiaomi-alioth.img (kernel)
+          - rootfs-xiaomi-alioth.img (sistema raw)
+          - rootfs-xiaomi-alioth.img.tar.gz (para TWRP)
+          INSTALL
+          
+          cat INSTALL.txt
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
