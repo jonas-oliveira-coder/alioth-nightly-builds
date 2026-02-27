@@ -1,9 +1,10 @@
 name: Build images
+
 on:
   push:
   workflow_dispatch:
   schedule:
-    - cron: '0 0 * * 5' # Run every friday at midnight
+    - cron: '0 0 * * 5'
 
 env:
   KERNEL_BRANCH: 6.12.1
@@ -11,25 +12,60 @@ env:
 jobs:
   build-image:
     runs-on: ubuntu-latest
+
+    container:
+      image: alpine:3.18
+
     steps:
+      - name: Install dependencies (Alpine 3.18)
+        run: |
+          apk update
+          apk add --no-cache \
+            bash \
+            git \
+            sudo \
+            build-base \
+            bc \
+            bison \
+            flex \
+            openssl-dev \
+            elfutils-dev \
+            perl \
+            python3 \
+            py3-pip \
+            rsync \
+            tar \
+            xz \
+            curl \
+            findutils \
+            grep \
+            coreutils \
+            util-linux \
+            linux-headers
+
       - name: Check out build configurations
         uses: actions/checkout@v4
 
       - name: Substitute placeholders in configs
+        shell: sh
         run: |
-          find . -type f -name "*.cfg" -exec sed -i "s|HOME|$(echo $HOME)|;s|NPROC|$(nproc)|" {} +
+          find . -type f -name "*.cfg" -exec sed -i "s|HOME|$HOME|;s|NPROC|$(nproc)|" {} +
 
       - name: Install pmbootstrap from git
         run: |
           git clone --depth=1 https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git
           mkdir -p ~/.local/bin
           ln -s "$PWD/pmbootstrap/pmbootstrap.py" ~/.local/bin/pmbootstrap
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          chmod +x ~/.local/bin/pmbootstrap
+          export PATH="$HOME/.local/bin:$PATH"
           pmbootstrap --version
+
+      - name: Initialize pmbootstrap
+        run: |
+          echo -e '\n\n' | pmbootstrap init || true
 
       - name: Set up pmaports
         run: |
-          echo -e '\n\n' | pmbootstrap init || true
           cd ~/.local/var/pmbootstrap/cache_git/pmaports
           git remote add mainlining https://github.com/mainlining/pmaports.git
           git fetch mainlining nikroks/alioth
@@ -37,58 +73,29 @@ jobs:
 
       - name: Clone kernel sources
         run: |
-          git clone https://github.com/mainlining/linux.git --single-branch --branch nikroks/alioth --depth 1 ./linux
+          git clone https://github.com/mainlining/linux.git \
+            --single-branch \
+            --branch nikroks/alioth \
+            --depth 1 ./linux
 
-      - name: Choose any SM8250 device in pmbootstrap to build kernel
+      - name: Choose device config
         run: |
+          mkdir -p ~/.config
           cp xiaomi-alioth.cfg ~/.config/pmbootstrap_v3.cfg
 
       - name: Compile kernel with envkernel
+        shell: bash
         run: |
           cd linux
-          shopt -s expand_aliases
           source ../pmbootstrap/helpers/envkernel.sh
           make defconfig sm8250.config
           make -j$(nproc)
           pmbootstrap build --envkernel linux-postmarketos-qcom-sm8250-alioth
 
       - name: Create artifact directory
-        run: |
-          mkdir -p out
+        run: mkdir out
 
-      # ============================================================
-      # HOOK DE CORREÇÃO PARA O LOSETUP (VERSÃO CORRIGIDA)
-      # ============================================================
-      - name: Create pmbootstrap hook to fix losetup location
-        run: |
-          mkdir -p ~/.local/var/pmbootstrap/hooks
-          cat > ~/.local/var/pmbootstrap/hooks/99-fix-losetup.sh << 'EOF'
-          #!/bin/sh
-          echo "========================================="
-          echo "Running losetup fix hook..."
-          echo "========================================="
-          # Caminho direto para o rootfs (mais confiável que pmbootstrap chroot)
-          ROOTFS="/home/runner/.local/var/pmbootstrap/chroot_rootfs_xiaomi-alioth"
-          
-          if [ -f "$ROOTFS/sbin/losetup" ]; then
-            mkdir -p "$ROOTFS/usr/sbin"
-            ln -sf /sbin/losetup "$ROOTFS/usr/sbin/losetup"
-            echo "✓ Symlink created: $ROOTFS/usr/sbin/losetup -> /sbin/losetup"
-          elif [ -f "$ROOTFS/usr/bin/losetup" ]; then
-            mkdir -p "$ROOTFS/usr/sbin"
-            ln -sf /usr/bin/losetup "$ROOTFS/usr/sbin/losetup"
-            echo "✓ Symlink created: $ROOTFS/usr/sbin/losetup -> /usr/bin/losetup"
-          else
-            echo "❌ losetup not found! Checking locations:"
-            ls -la "$ROOTFS/sbin" || true
-            ls -la "$ROOTFS/usr/bin" || true
-            exit 1
-          fi
-          EOF
-          chmod +x ~/.local/var/pmbootstrap/hooks/99-fix-losetup.sh
-          echo "✅ Hook installed at ~/.local/var/pmbootstrap/hooks/99-fix-losetup.sh"
-
-      - name: Build xiaomi-alioth
+      - name: Build xiaomi-alioth image
         run: |
           cp xiaomi-alioth.cfg ~/.config/pmbootstrap_v3.cfg
           pmbootstrap install --password 147147
@@ -96,78 +103,9 @@ jobs:
           cp /tmp/postmarketOS-export/boot.img out/boot-xiaomi-alioth.img
           cp /tmp/postmarketOS-export/xiaomi-alioth.img out/rootfs-xiaomi-alioth.img
 
-      # ============================================================
-      # NOVO: Gerar imagens para instalação
-      # ============================================================
-      - name: Prepare installation images
-        run: |
-          cd out
-          
-          # Verificar tipo do rootfs
-          echo "=== Rootfs information ==="
-          file rootfs-xiaomi-alioth.img
-          
-          # Criar versão raw para flash direto
-          cp rootfs-xiaomi-alioth.img rootfs-raw.img
-          
-          # Criar versão tar.gz para extração via TWRP
-          gzip -c rootfs-xiaomi-alioth.img > rootfs-xiaomi-alioth.img.tar.gz
-          
-          # Informações para instalação
-          cat > INSTALL.txt << 'INSTALL'
-          ========================================
-          INSTRUÇÕES DE INSTALAÇÃO - XIAOMI ALIOTH
-          ========================================
-
-          SEU DISPOSITIVO TEM:
-          - Sistema A/B (slots a e b)
-          - NÃO tem partição system (usa super dinâmica)
-          - Partição userdata de ~113GB disponível
-
-          MÉTODO 1: INSTALAÇÃO VIA FASTBOOT (RECOMENDADO)
-          ------------------------------------------------
-          1. fastboot flash boot_a boot-xiaomi-alioth.img
-          2. fastboot flash userdata rootfs-xiaomi-alioth.img
-          3. fastboot set_active a
-          4. fastboot reboot
-
-          MÉTODO 2: INSTALAÇÃO VIA TWRP
-          -----------------------------
-          1. fastboot boot twrp-*.img
-          2. adb push rootfs-xiaomi-alioth.img.tar.gz /sdcard/
-          3. No TWRP: Wipe → Format Data (ext4)
-          4. No TWRP: Advanced → Terminal
-             cd /data
-             tar -xzvf /sdcard/rootfs-xiaomi-alioth.img.tar.gz
-          5. Install → Install Image → boot.img → partição Boot
-          6. Reboot
-
-          MÉTODO 3: SE NÃO BOOTAR
-          -----------------------
-          1. Tente o outro slot: fastboot set_active b
-          2. Use parâmetros de debug:
-             fastboot boot boot-xiaomi-alioth.img --cmdline "pmos.debug-shell pmos.verbose console=tty0"
-          
-          Arquivos gerados:
-          - boot-xiaomi-alioth.img (kernel)
-          - rootfs-xiaomi-alioth.img (sistema raw)
-          - rootfs-xiaomi-alioth.img.tar.gz (para TWRP)
-          INSTALL
-          
-          cat INSTALL.txt
-
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: xiaomi-alioth
           path: out/*-alioth.img*
-          retention-days: 7
-
-      # Log em caso de falha
-      - name: Upload pmbootstrap log on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pmbootstrap-log
-          path: /home/runner/.local/var/pmbootstrap/log.txt
           retention-days: 7
