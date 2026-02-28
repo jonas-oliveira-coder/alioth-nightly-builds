@@ -15,11 +15,16 @@ jobs:
       image: alpine:3.18
 
     steps:
-      - name: Fix Alpine repositories to 3.18
+      - name: Install pmbootstrap (locked 2023 era)
         run: |
-          echo "https://dl-cdn.alpinelinux.org/alpine/v3.18/main" > /etc/apk/repositories
-          echo "https://dl-cdn.alpinelinux.org/alpine/v3.18/community" >> /etc/apk/repositories
-          apk update
+          git clone https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git
+          cd pmbootstrap
+          git checkout v2.2.0
+          mkdir -p ~/.local/bin
+          ln -s "$PWD/pmbootstrap.py" ~/.local/bin/pmbootstrap
+          chmod +x ~/.local/bin/pmbootstrap
+          export PATH="$HOME/.local/bin:$PATH"
+          pmbootstrap --version
 
       - name: Install base dependencies
         run: |
