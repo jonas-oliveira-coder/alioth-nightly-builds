@@ -4,9 +4,6 @@ on:
   push:
   workflow_dispatch:
 
-env:
-  PMOS_BRANCH: 23.03
-
 jobs:
   build-image:
     runs-on: ubuntu-latest
@@ -15,24 +12,22 @@ jobs:
       image: alpine:3.18
 
     steps:
-      - name: Install pmbootstrap (locked 2023 era)
+      # 🔒 Fix Alpine repositories
+      - name: Fix Alpine repositories to 3.18
         run: |
-          git clone https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git
-          cd pmbootstrap
-          git checkout v2.2.0
-          mkdir -p ~/.local/bin
-          ln -s "$PWD/pmbootstrap.py" ~/.local/bin/pmbootstrap
-          chmod +x ~/.local/bin/pmbootstrap
-          export PATH="$HOME/.local/bin:$PATH"
-          pmbootstrap --version
+          echo "https://dl-cdn.alpinelinux.org/alpine/v3.18/main" > /etc/apk/repositories
+          echo "https://dl-cdn.alpinelinux.org/alpine/v3.18/community" >> /etc/apk/repositories
+          apk update
 
-      - name: Install base dependencies
+      # 🔧 Install required packages
+      - name: Install build dependencies
         run: |
           apk add --no-cache \
             bash \
             git \
             sudo \
             build-base \
+            linux-headers \
             bc \
             bison \
             flex \
@@ -48,59 +43,66 @@ jobs:
             findutils \
             grep \
             coreutils \
-            util-linux \
-            linux-headers
+            util-linux
 
-      - name: Checkout repo
+      # 📦 Checkout your repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 🔒 PMBOOTSTRAP TRAVADO NA 23.03
-      - name: Install pmbootstrap 23.03
+      # 🔒 Install pmbootstrap v2.2.0 (era 23.03)
+      - name: Install pmbootstrap (locked)
         run: |
-          git clone --depth=1 --branch $PMOS_BRANCH \
-            https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git
+          git clone https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git
+          cd pmbootstrap
+          git checkout v2.2.0
           mkdir -p ~/.local/bin
-          ln -s "$PWD/pmbootstrap/pmbootstrap.py" ~/.local/bin/pmbootstrap
+          ln -s "$PWD/pmbootstrap.py" ~/.local/bin/pmbootstrap
           chmod +x ~/.local/bin/pmbootstrap
           export PATH="$HOME/.local/bin:$PATH"
           pmbootstrap --version
 
-      # 🔒 INIT SEM INTERAÇÃO
+      # 🔧 Initialize pmbootstrap non-interactive
       - name: Initialize pmbootstrap
         run: |
+          export PATH="$HOME/.local/bin:$PATH"
           yes "" | pmbootstrap init
 
-      # 🔒 PMAPORTS TRAVADO NA 23.03
+      # 🔒 Lock pmaports to 23.03
       - name: Lock pmaports to 23.03
         run: |
           cd ~/.local/var/pmbootstrap/cache_git/pmaports
-          git fetch origin $PMOS_BRANCH
-          git reset --hard origin/$PMOS_BRANCH
+          git fetch origin 23.03
+          git reset --hard origin/23.03
 
-      # 👇 AQUI você injeta seu branch alioth
-      - name: Inject mainlining alioth branch
+      # 🔥 Inject mainlining alioth branch
+      - name: Inject alioth device branch
         run: |
           cd ~/.local/var/pmbootstrap/cache_git/pmaports
-          git remote add mainlining https://github.com/mainlining/pmaports.git
+          git remote add mainlining https://github.com/mainlining/pmaports.git || true
           git fetch mainlining nikroks/alioth
           git checkout -B alioth mainlining/nikroks/alioth
 
+      # 📁 Copy device config
       - name: Copy device config
         run: |
           mkdir -p ~/.config
           cp xiaomi-alioth.cfg ~/.config/pmbootstrap_v3.cfg
 
-      - name: Build device
+      # 🏗 Build device
+      - name: Build xiaomi-alioth
         run: |
+          export PATH="$HOME/.local/bin:$PATH"
           pmbootstrap install --password 147147
           pmbootstrap export
 
+      # 📦 Collect artifacts
       - name: Prepare artifacts
         run: |
-          mkdir out
+          mkdir -p out
           cp /tmp/postmarketOS-export/boot.img out/boot-xiaomi-alioth.img
           cp /tmp/postmarketOS-export/xiaomi-alioth.img out/rootfs-xiaomi-alioth.img
 
+      # ⬆ Upload artifacts
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
