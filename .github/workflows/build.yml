@@ -1,111 +1,71 @@
-name: Build images (pmOS 23.03 locked)
-
+name: Build images
 on:
   push:
   workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * 5' # Run every friday at midnight
+
+env:
+  KERNEL_BRANCH: 6.12.1
 
 jobs:
   build-image:
     runs-on: ubuntu-latest
-
-    container:
-      image: alpine:3.18
-
     steps:
-      # 🔒 Fix Alpine repositories
-      - name: Fix Alpine repositories to 3.18
-        run: |
-          echo "https://dl-cdn.alpinelinux.org/alpine/v3.18/main" > /etc/apk/repositories
-          echo "https://dl-cdn.alpinelinux.org/alpine/v3.18/community" >> /etc/apk/repositories
-          apk update
-
-      # 🔧 Install required packages
-      - name: Install build dependencies
-        run: |
-          apk add --no-cache \
-            bash \
-            git \
-            sudo \
-            build-base \
-            linux-headers \
-            bc \
-            bison \
-            flex \
-            openssl-dev \
-            elfutils-dev \
-            perl \
-            python3 \
-            py3-pip \
-            rsync \
-            tar \
-            xz \
-            curl \
-            findutils \
-            grep \
-            coreutils \
-            util-linux
-
-      # 📦 Checkout your repository
-      - name: Checkout repository
+      - name: Check out build configurations
         uses: actions/checkout@v4
 
-      # 🔒 Install pmbootstrap v2.2.0 (era 23.03)
-      - name: Install pmbootstrap (locked)
+      - name: Substitute placeholders in configs
         run: |
-          git clone https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git
-          cd pmbootstrap
-          git checkout v2.2.0
+          find . -type f -name "*.cfg" -exec sed -i "s|HOME|$(echo $HOME)|;s|NPROC|$(nproc)|" {} +
+
+      - name: Install pmbootstrap from git
+        run: |
+          git clone --depth=1 https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git
           mkdir -p ~/.local/bin
-          ln -s "$PWD/pmbootstrap.py" ~/.local/bin/pmbootstrap
-          chmod +x ~/.local/bin/pmbootstrap
-          export PATH="$HOME/.local/bin:$PATH"
+          ln -s "$PWD/pmbootstrap/pmbootstrap.py" ~/.local/bin/pmbootstrap
           pmbootstrap --version
 
-      # 🔧 Initialize pmbootstrap non-interactive
-      - name: Initialize pmbootstrap
+      - name: Set up pmaports
         run: |
-          export PATH="$HOME/.local/bin:$PATH"
-          yes "" | pmbootstrap init
-
-      # 🔒 Lock pmaports to 23.03
-      - name: Lock pmaports to 23.03
-        run: |
+          echo -e '\n\n' | pmbootstrap init || true
           cd ~/.local/var/pmbootstrap/cache_git/pmaports
-          git fetch origin 23.03
-          git reset --hard origin/23.03
-
-      # 🔥 Inject mainlining alioth branch
-      - name: Inject alioth device branch
-        run: |
-          cd ~/.local/var/pmbootstrap/cache_git/pmaports
-          git remote add mainlining https://github.com/mainlining/pmaports.git || true
+          git remote add mainlining https://github.com/mainlining/pmaports.git
           git fetch mainlining nikroks/alioth
-          git checkout -B alioth mainlining/nikroks/alioth
+          git reset --hard mainlining/nikroks/alioth
 
-      # 📁 Copy device config
-      - name: Copy device config
+      - name: Clone kernel sources
         run: |
-          mkdir -p ~/.config
+          git clone https://github.com/mainlining/linux.git --single-branch --branch nikroks/alioth --depth 1 ./linux
+
+      - name: Choose any SM8250 device in pmbootstrap to build kernel
+        run: |
           cp xiaomi-alioth.cfg ~/.config/pmbootstrap_v3.cfg
 
-      # 🏗 Build device
+      - name: Compile kernel with envkernel
+        run: |
+          cd linux
+          shopt -s expand_aliases
+          source ../pmbootstrap/helpers/envkernel.sh
+          make defconfig sm8250.config
+          make -j$(nproc)
+          pmbootstrap build --envkernel linux-postmarketos-qcom-sm8250-alioth
+
+      - name: Create artifact directory
+        run: |
+          mkdir out
+
       - name: Build xiaomi-alioth
         run: |
-          export PATH="$HOME/.local/bin:$PATH"
+          cp xiaomi-alioth.cfg ~/.config/pmbootstrap_v3.cfg
           pmbootstrap install --password 147147
           pmbootstrap export
-
-      # 📦 Collect artifacts
-      - name: Prepare artifacts
-        run: |
-          mkdir -p out
-          cp /tmp/postmarketOS-export/boot.img out/boot-xiaomi-alioth.img
+          cp /tmp/postmarketOS-export/boot.img out/boot-xiaomi-tianma-alioth.img
           cp /tmp/postmarketOS-export/xiaomi-alioth.img out/rootfs-xiaomi-alioth.img
 
-      # ⬆ Upload artifacts
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: xiaomi-alioth
-          path: out/*.img
+          path: out/*-alioth.img*
           retention-days: 7
